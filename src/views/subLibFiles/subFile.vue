@@ -1,10 +1,8 @@
 <template>
   <div class="fileComp">
     <div class="operationContainer" style="height: 40px;border-bottom:1px solid #ebeef5" v-if="forUse !== 'preview'">
-      <div style="float: left;padding-left: 10px;">
-        <el-breadcrumb separator-class="el-icon-arrow-right">
-          <el-breadcrumb-item v-for="(item,index) in breadcrumbList" :key="index"><span style="cursor: pointer;color:rgb(0, 171, 235);" @click="switchFolder(item,index)">{{item.name}}</span></el-breadcrumb-item>
-        </el-breadcrumb>
+      <div style="position: absolute;top: 70px;left: 27px;">
+        <el-button type="primary" @click="handleCommit">提交审核</el-button>
       </div>
       <div style="float: right;color:rgb(0, 171, 235);cursor: pointer;padding-right: 20px;">
         <span @click="handleuploadFile">
@@ -17,14 +15,19 @@
               highlight-current-row
               style="width: 100%"
               class="fileList"
+              @selection-change="handleSelectionChange"
     >
+      <el-table-column
+        type="selection"
+        :selectable="fileAuditSelection"
+        width="55">
+      </el-table-column>
       <el-table-column label="文件名" min-width="200">
         <template slot-scope="scope">
           <span>
             <svg-icon :icon-class="classifyIcon(scope.row)" style="font-size: 30px;margin-right: 10px;cursor: pointer;color:  #26bada;"></svg-icon>
             <el-tooltip class="item" effect="dark" :content="scope.row.name" placement="top">
-              <span v-if="!scope.row.newFolder" class="link-type"
-                    @click="loadListFile(scope.row)"
+              <span v-if="!scope.row.newFolder" class="link-type" :class="{'repeatFile': scope.row.repeat}"
                     style="position:relative;top:2px;display:inline-block;width:70%;white-space:nowrap;overflow:hidden;text-overflow: ellipsis">
                 {{scope.row.name}}
               </span>
@@ -54,6 +57,11 @@
       <el-table-column width="120" label="密级">
         <template slot-scope="scope">
           <span>{{computedSecret(scope.row.secretClass)}}</span>
+        </template>
+      </el-table-column>
+      <el-table-column width="120" label="版本">
+        <template slot-scope="scope">
+          <span>{{scope.row.version}}</span>
         </template>
       </el-table-column>
       <el-table-column min-width="150px" label="创建时间">
@@ -128,16 +136,6 @@
         <el-form-item label="文件图号">
           <el-input v-model="fileUpInfo.fileNo" placeholder="请输入文件图号"></el-input>
         </el-form-item>
-        <el-form-item label="目标库">
-          <el-cascader
-            style="width: 100%"
-            :options="libOptions"
-            @focus="getLib"
-            @active-item-change="handleItemChange"
-            @change="onSubLibChange"
-          ></el-cascader>
-          <!--:props="libProps"-->
-        </el-form-item>
       </el-form>
       <uploader :options="options"
                 :autoStart="autoStart"
@@ -145,7 +143,6 @@
                 ref="uploader"
                 class="manage-uploader"
                 @file-complete="fileComplete"
-                @complete="complete"
                 @files-added="checkMd5"
                 @file-success="fileSuccess"
                 @file-removed="fileRemove"
@@ -159,28 +156,20 @@
           <!--<uploader-btn :directory="true">选择文件夹</uploader-btn>-->
         </uploader-drop>
         <!--<uploader-btn>选择文件</uploader-btn>-->
+        <div class="repeatFiles">
+          <el-table :key='tableKey' :data="repeatFiles">
+            <el-table-column label="密级">
+              <template slot-scope="scope">
+                <span>{{scope.row.name}}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
         <uploader-list ref="uploaderList"></uploader-list>
       </uploader>
       <span slot="footer" class="dialog-footer">
         <el-button v-if="!hiddenClose" @click="uploadDialog = false">关 闭</el-button>
         <!--<el-button type="primary" @click="uploadFile" :loading="upFileLoading">确 定</el-button>-->
-      </span>
-    </el-dialog>
-    <!--文件重命名-->
-    <el-dialog
-      class="maniFileDialog"
-      title="文件重命名"
-      :visible.sync="renameDialog"
-      append-to-body
-      width="30%">
-      <el-form ref="fileRenameForm" :rules="fileRenameRules" :model="fileRename" label-position="right" label-width="70px" style='width: 80%; margin:0 auto;'>
-        <el-form-item label="名称" prop="name">
-          <el-input v-model="fileRename.name"></el-input>
-        </el-form-item>
-      </el-form>
-      <span slot="footer" class="dialog-footer">
-        <el-button @click="renameDialog = false">取 消</el-button>
-        <el-button type="primary" @click="renameFile">确 定</el-button>
       </span>
     </el-dialog>
     <!--文件信息修改-->
@@ -223,19 +212,115 @@
         <el-button type="primary" @click="editFileInfo">确 定</el-button>
       </span>
     </el-dialog>
+    <!--选择审核人-->
+    <el-dialog title="选择审核人" :visible.sync="commitDialog" append-to-body width="60%" class="limit-width-dialog audit-dialog">
+      <el-radio-group v-model="signType">
+        <el-radio :label="1">无会签</el-radio>
+        <el-radio :label="2">一人会签通过</el-radio>
+        <el-radio :label="3">多人会签通过</el-radio>
+      </el-radio-group>
+      <el-collapse v-model="activeNames" accordion class="audit-collapse">
+        <el-collapse-item title="选择核对人" name="1">
+          <div>
+            <el-table
+              v-loading="getMaLoading"
+              ref="multipleTable"
+              :data="userList"
+              tooltip-effect="dark"
+              style="width: 100%"
+              @selection-change="handleVerifySelectionChange">
+              <el-table-column
+                type="selection"
+                width="55">
+              </el-table-column>
+              <el-table-column
+                label="用户名"
+                min-width="120">
+                <template slot-scope="scope">{{ scope.row.username }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-collapse-item>
+        <el-collapse-item title="选择审核人" name="2">
+          <div>
+            <el-table
+              v-loading="getMaLoading"
+              ref="multipleTable"
+              :data="userList"
+              tooltip-effect="dark"
+              style="width: 100%"
+              @selection-change="handleAuditSelectionChange">
+              <el-table-column
+                type="selection"
+                width="55">
+              </el-table-column>
+              <el-table-column
+                label="用户名"
+                min-width="120">
+                <template slot-scope="scope">{{ scope.row.username }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-collapse-item>
+        <el-collapse-item title="选择会签人" name="3" v-if="signType === 2 || signType === 3">
+          <div>
+            <el-table
+              v-loading="getMaLoading"
+              ref="multipleTable"
+              :data="computeList"
+              tooltip-effect="dark"
+              style="width: 100%"
+              @selection-change="handleSignSelectionChange">
+              <el-table-column
+                type="selection"
+                width="55">
+              </el-table-column>
+              <el-table-column
+                label="用户名"
+                min-width="120">
+                <template slot-scope="scope">{{ scope.row.username }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-collapse-item>
+        <el-collapse-item title="选择批准人" name="4">
+          <div>
+            <el-table
+              v-loading="getMaLoading"
+              ref="multipleTable"
+              :data="userList"
+              tooltip-effect="dark"
+              style="width: 100%"
+              @selection-change="handleApproveSelectionChange">
+              <el-table-column
+                type="selection"
+                width="55">
+              </el-table-column>
+              <el-table-column
+                label="用户名"
+                min-width="120">
+                <template slot-scope="scope">{{ scope.row.username }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+      <div style="text-align: right" slot="footer" class="dialog-footer">
+        <el-button type="primary" @click="commitToAuditor" style="margin-top: 10px;">确定</el-button>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script>
   /*eslint-disable*/
-  import { compList, createComp, updateComp, copyComp, importComp, deleteComp, compSingle, saveFolder, getCompFiles, saveFiles, deleteCompFiles, uploadFolder, previewFiles } from '@/api/component'
+  import {  previewFiles } from '@/api/component'
   import { movefileTo, copyFileTo, renameFile } from '@/api/component'
-  import { getTaskFiles, downloadtaskFile, deleteTaskFile, editFileInfo } from '@/api/pro-design-link'
-  import { libraryList, subLibraryList } from "@/api/library"
+  import { getSubLibFiles, uploadSubLibFiles, deleteSubLibFile, editSubLibFileInfo, setLibFileAuditors } from '@/api/sublibFIles'
+  import { allUser } from '@/api/getUsers'
   import service from '@/utils/request'
-  import maniFile from '@/views/fileManager/maniFile'
   import SparkMD5 from 'spark-md5'
-  import { hasMd5, mergeFile, uploadFiles } from '@/api/componentFiles'
+  import { hasMd5, mergeFile } from '@/api/componentFiles'
   import qs from 'qs'
 
   export default {
@@ -254,9 +339,6 @@
       proClass: {
         type: Number
       }
-    },
-    components: {
-      maniFile
     },
     data() {
       return {
@@ -279,14 +361,12 @@
           type: null,
           productNo: null,
           fileNo: null
-          // codeName: null
         },
         fileUpInfo: {
           secretClass: null,
           type: null,
           productNo: null,
           fileNo: null
-          // codeName: null
         },
         secretClassOptions: [
           {
@@ -339,7 +419,6 @@
           }
         ],
         uploadDialog: false,
-        uploadFolderDialog: false,
         renameDialog: false,
         maniFileDialog: false,
         editInfoDialog: false,
@@ -352,23 +431,9 @@
         listLoading: true,
         uploading: false,
         upFileLoading: false,
-        upFolderLoading: false,
-        listQuery: {
-          page: 1,
-          limit: 10,
-          importance: undefined,
-          title: undefined,
-          type: undefined,
-          sort: '+id',
-          deviceName: undefined
-        },
-        sortable: null,
-        oldList: [],
-        newList: [],
         fileRenameRules: {
           name: [{ required: true, message: '请输入文件名！', trigger: 'blur' }]
         },
-        downloadLoading: false,
         maniFileLoading: false,
         options: {
           target: 'http://127.0.0.1:8080/files/chunks',
@@ -391,33 +456,32 @@
           paused: '暂停中',
           waiting: '等待中'
         },
-        fileTreeList: [],
         md5Loading: false,
         started: false,
         autoStart: false,
-        fileInfo: [],
-        folderInfo: [],
         files: [],
-        folderClearData: [],        //文件夹需要清空的内容数组
-        fileClearData: [],          //文件需要清空的内容数组
-        fileAll: [],
+        fileInfo: [],
         searchQuery: '',
-        CheckedComps: [],
         target: '',
         token: '',
-        folderFileInfo: [],
         fileInfoList: [],
         fileCompleteLength: 0,
-        folderfileCompleteLength: 0,
         stopResolveMD5: false,
         hiddenClose: false,
         libOptions: [],
-        libProps: {
-          label: 'type',
-          value: 'id',
-          children: 'children'
-        },
-        selectedLib: null
+        selectedFiles: [],
+        selectedFileIds: [],
+        commitDialog: false,
+        signType: 0,
+        activeNames: '',
+        getMaLoading: false,
+        userList: [],
+        countersignList: [],
+        verifyMembers: [],
+        auditMembers: [],
+        signMembers: [],
+        approveMembers: [],
+        repeatFiles: []
       }
     },
     created() {
@@ -431,8 +495,32 @@
       this.maniType = ''
     },
     methods: {
-      processResponse() {
-        console.log(arguments, 'processResponse')
+      getAbleUser() {
+        this.getMaLoading = true
+        allUser().then((res) => {
+          if(res.data.code === 0) {
+            this.userList = []
+            res.data.data.forEach((item) => {
+              if(item.username !== 'admin' && item.username !== 'securityGuard' && item.username !== 'securityAuditor') {
+                this.userList.push(item)
+              }
+            })
+            // this.userList = res.data.data
+            this.countersignList = this.userList.slice(0)
+            // 筛选多人会签用户，不能选择自己作为会签人
+            for(let i=0;i<this.countersignList.length;i++){
+              if(this.countersignList[i].id === this.userId){
+                this.countersignList.splice(i,1)
+                break
+              }
+            }
+            this.getMaLoading = false
+          } else {
+            this.getMaLoading = false
+          }
+        }).catch(() => {
+          this.getMaLoading = false
+        })
       },
       initData() {
         this.projectId = this.$store.getters.projectId
@@ -446,7 +534,6 @@
           parentNodeId: '',
           folder: true
         })
-        // console.log(this.breadcrumbList)
 
         if(this.componentId){
           this.getList();
@@ -457,11 +544,9 @@
       },
       getList() {
         this.listLoading = true
-        getTaskFiles(this.componentId,this.parentNodeId).then((res) => {
+        getSubLibFiles(this.componentId).then((res) => {
           this.list = res.data.data
           this.listLoading = false
-          // this.parentNodeId = ''
-          // (this.parentNodeId)
         }).catch(() => {
           this.listLoading = false
           this.$notify({
@@ -471,33 +556,6 @@
             duration: 2000
           })
         })
-      },
-      loadListFile(row) {
-        if(row.folder){
-          this.parentNodeId = row.id
-          this.listLoading = true
-          getCompFiles(this.componentId,this.parentNodeId).then((res) => {
-            this.listLoading = false
-            this.list = res.data.data
-            this.breadcrumbList.push({
-              name: row.name,
-              componentId: this.componentId,
-              parentNodeId: row.id,
-              folder: true
-            })
-
-          }).catch(() => {
-            this.listLoading = false
-            this.$notify({
-              title: '失败',
-              message: '加载出错！',
-              type: 'error',
-              duration: 2000
-            })
-          })
-        } else {
-          return
-        }
       },
       handleuploadFile() {
         this.uploadDialog = true
@@ -518,9 +576,36 @@
       // 添加文件时触发
       checkMd5 (fileAdded, fileList) {
         // console.log(this.$refs.uploader.uploader.files)
-        this.hiddenClose = true
-        this.md5Loading = true
-        $('.manage-uploader .uploader-btn').css('display','none')
+
+        // 防止用户上传文件名称相同的文件，在上传前就去除名称重复的文件
+        this.repeatFiles = []
+        for(let j = fileAdded.length - 1; j >= 0; j--) {
+          for(let k = 0; k < this.list.length; k++) {
+            if(fileAdded[j] !== undefined) {
+              if(fileAdded[j].name === this.list[k].name + '.' + this.list[k].postfix) {
+                let fileRepeat = fileAdded[j]
+                this.repeatFiles.push(fileRepeat)
+                this.$refs.uploader.uploader.removeFile(fileRepeat)
+                fileAdded.splice(j, 1);
+                continue;
+              }
+            }
+          }
+        }
+        if(this.repeatFiles.length > 0) {
+          this.$message({
+            showClose: true,
+            message: '请注意，此次上传的文件中有文件在库中已存在！',
+            type: 'warning',
+            //duration: 0
+          });
+        }
+        if(fileAdded.length > 0) {
+          this.hiddenClose = true
+          this.md5Loading = true
+          $('.manage-uploader .uploader-btn').css('display','none')
+        }
+
         this.fileCompleteLength += fileAdded.length
         let chunkSize = this.$refs.uploader.uploader.opts.chunkSize
         let completeFlag = 0
@@ -528,7 +613,6 @@
         for(var i = 0; i < fileAdded.length; i++) {
           let fileA = fileAdded[i]
           this.resolveMd5(fileA, chunkSize).then(function (result) {
-            console.log(result)
             fileA.md5 = result
             fileA.uniqueIdentifier = result
             hasMd5(fileA.md5).then((res) => {
@@ -599,10 +683,8 @@
             fileReader.onload = e => {
               spark.appendBinary(e.target.result)
               currentChunk++
-              console.log(currentChunk)
               if (currentChunk < chunks) {
                 let a = 'deal with' + currentChunk + '剩余' + (chunks - currentChunk)
-                console.log(a)
                 load()
               } else {
                 resolve(spark.end())
@@ -633,11 +715,6 @@
           'relativePath': path
         }
         let datapost = qs.stringify(data)
-        /*axios.post('http://192.168.31.13:8080/files/chunks/merge', datapost, {
-          headers: {
-            'content-type': 'application/x-www-form-urlencoded'
-          }
-        })*/
         mergeFile(datapost).then(() => {
         }).catch(() => {
           this.$notify({
@@ -647,9 +724,6 @@
       },
       // 上传文件时 fileSuccess 第一个参数为根文件， 第二个参数为上传的文件
       fileSuccess () {
-        // console.log('fileSuccess', arguments)
-        // this.fileMd5HeadTailTime(arguments[1].file, this.$refs.uploader.uploader.opts.chunkSize)
-        // this.mergeFile(arguments[1].uniqueIdentifier, arguments[1].chunks.length, arguments[1].size, arguments[1].name, arguments[1].relativePath)
         let data = {
           'identifier': arguments[1].uniqueIdentifier,
           'totalChunks': arguments[1].chunks.length,
@@ -670,7 +744,8 @@
               type: this.fileUpInfo.type,
               productNo: this.fileUpInfo.productNo,
               fileNo: this.fileUpInfo.fileNo,
-              sublibraryId: this.fileUpInfo.subLibraryId
+              sublibraryId: this.componentId,
+              userId: this.userId
               // codeName: this.fileUpInfo.codeName
             }
             this.fileInfoList.push(infoList)
@@ -688,38 +763,6 @@
       fileComplete () {
         console.log('filecomplete=======')
       },
-      complete () {
-      },
-      uploadFile() {
-        this.listLoading = true
-        this.uploading = true
-        this.upFileLoading = true
-        let formData = new FormData()
-        formData.append('parentnodeid', this.parentNodeId)
-        this.fileAll = this.$refs.uploader.uploader.files
-        for (var i = 0; i < this.fileAll.length; i++) {
-          //判断数组里是文件夹还是文件
-          formData.append('files', this.fileAll[i].file)
-        }
-        saveFiles(this.componentId, formData).then((res) => {
-          this.uploading = false
-          this.upFileLoading = false
-          this.$refs.uploader.uploader.cancel()
-          this.getList()
-          this.listLoading = false
-          this.uploadDialog = false
-        }).catch((error) => {
-          this.listLoading = false
-          this.uploading = false
-          this.upFileLoading = false
-          this.$notify({
-            title: '失败',
-            message: '上传失败',
-            type: 'error',
-            duration: 2000
-          })
-        })
-      },
       deleteFile(row) {
         this.$confirm('确认删除吗？', '提示', {
           confirmButtonText: '确定',
@@ -727,7 +770,7 @@
           type: 'warning'
         }).then(() => {
           this.listLoading = true
-          deleteTaskFile(row.id).then((res) => {
+          deleteSubLibFile(row.id).then((res) => {
             if(res.data.code === 0) {
               this.getList()
               this.$notify({
@@ -766,192 +809,9 @@
 
         })
       },
-      switchFolder(row,index){
-        // console.log(this.breadcrumbList)
-        if(row.folder){
-          this.listLoading = true
-          this.parentNodeId = row.parentNodeId
-          getCompFiles(this.componentId,this.parentNodeId).then((res) => {
-            this.listLoading = false
-            this.list = res.data.data
-            this.breadcrumbList.splice(index+1, this.breadcrumbList.length-index-1)
-          }).catch(() => {
-            this.listLoading = false
-          })
-        } else {
-          return
-        }
-      },
       exportFile(row) {
-        let url = service.defaults.baseURL + '/subtaskFiles/' + row.id + '/user/' + this.userId + '/export'
+        let url = service.defaults.baseURL + '/sublibraryFiles/sublibraryFile/' + row.id + '/user/' + this.userId + '/export'
         window.open(url)
-      },
-      handleMove(row) {
-        this.maniFileDialog = true
-        this.maniFileLoading = true
-        /*this.$nextTick(() => {
-          this.resetManiFile()
-        })*/
-        getCompFiles(this.componentId, '').then((res) => {
-          this.maniFileLoading = false
-          this.$refs.maniFile.list = res.data.data
-          this.resetManiFile()
-        }).catch(() => {
-          this.maniFileLoading = false
-          this.maniFileDialog = false
-          this.$notify({
-            title: '失败',
-            message: '加载出错！',
-            type: 'error',
-            duration: 2000
-          })
-        })
-        this.selectFileId = row.id
-        this.maniType = 'move'
-      },
-      handleCopy(row) {
-        this.maniFileDialog = true
-        this.maniFileLoading = true
-        getCompFiles(this.componentId, '').then((res) => {
-          this.maniFileLoading = false
-          this.$refs.maniFile.list = res.data.data
-          this.resetManiFile()
-        }).catch(() => {
-          this.maniFileLoading = false
-          this.maniFileDialog = false
-          this.$notify({
-            title: '失败',
-            message: '加载出错！',
-            type: 'error',
-            duration: 2000
-          })
-        })
-        this.selectFileId = row.id
-        this.maniType = 'copy'
-      },
-      resetManiFile() {
-        this.$refs.maniFile.breadcrumbList = []
-        this.$refs.maniFile.projectId = this.$store.getters.projectId
-        this.$refs.maniFile.componentId = this.selectCompId
-        this.$refs.maniFile.compName = this.selectCompName
-        this.$refs.maniFile.targetFolderId = this.componentId
-        this.$refs.maniFile.targetComponentId = this.componentId
-        this.$refs.maniFile.breadcrumbList.push({
-          name: this.selectCompName,
-          componentId: this.selectCompId,
-          parentNodeId: '',
-          folder: true
-        })
-
-      },
-      handleRenameFile(row) {
-        this.renameDialog = true
-        this.fileRename = {
-          name: row.name
-        }
-        this.selectFileId = row.id
-        this.$nextTick(() => {
-          this.$refs['fileRenameForm'].clearValidate()
-        })
-
-      },
-      renameFile() {
-        this.$refs['fileRenameForm'].validate((valid) => {
-          if (valid) {
-            let nameData = {
-              'name': this.fileRename.name
-            }
-            var qs = require('qs');
-            let datapost = qs.stringify(nameData)
-            renameFile(this.selectFileId, datapost).then(() => {
-              this.fileRename.name = ''
-              this.renameDialog = false
-              this.$notify({
-                title: '成功',
-                message: '文件重命名成功！',
-                type: 'success',
-                duration: 2000
-              })
-              this.getList()
-            }).catch((error) => {
-              this.fileRename.name = ''
-              this.errorMessage = '重命名失败！'
-              if(error.response.data.message){
-                this.errorMessage = error.response.data.message
-              }
-              this.$notify({
-                title: '失败',
-                message: this.errorMessage,
-                type: 'error',
-                duration: 2000
-              })
-            })
-          }
-        })
-      },
-      maniFile() {
-        if(this.$refs.maniFile.targetComponentId === '') {
-          this.$message({
-            type: 'warning',
-            message: '请先选择目标组件！'
-          })
-          return
-        }
-        let data = {
-          'targetNodeId': this.$refs.maniFile.targetFolderId,
-          'targetComponentId': this.$refs.maniFile.targetComponentId
-        }
-        var qs = require('qs');
-        let datapost = qs.stringify(data)
-        // 移动文件
-        if(this.maniType == 'move') {
-          // this.$refs.maniFile.moveFile()
-          movefileTo(this.$refs.maniFile.selectFileId, this.$refs.maniFile.targetFolderId, datapost).then(() => {
-            this.maniFileDialog = false
-            this.$notify({
-              title: '成功',
-              message: '文件移动成功！',
-              type: 'success',
-              duration: 2000
-            })
-            this.getList()
-          }).catch(() => {
-            // this.resetManiFile()
-            // this.$refs.maniFile.initData()
-            this.maniFileDialog = false
-            this.$notify({
-              title: '失败',
-              message: '文件移动失败！',
-              type: 'error',
-              duration: 2000
-            })
-          })
-        } else if(this.maniType == 'copy') {
-          // 复制文件
-          // this.$refs.maniFile.initData()
-          copyFileTo(this.$refs.maniFile.selectFileId, this.$refs.maniFile.targetFolderId, datapost).then(() => {
-            // this.resetManiFile()
-            this.maniFileDialog = false
-            this.$notify({
-              title: '成功',
-              message: '文件移动成功！',
-              type: 'success',
-              duration: 2000
-            })
-            this.getList()
-            // this.$refs.maniFile.getList()
-          }).catch(() => {
-            // this.resetManiFile()
-            // this.$refs.maniFile.initData()
-            this.maniFileDialog = false
-            this.$notify({
-              title: '失败',
-              message: '文件复制失败！',
-              type: 'error',
-              duration: 2000
-            })
-          })
-        }
       },
       handleEditInfo(row) {
         this.editInfoDialog = true
@@ -974,7 +834,7 @@
         }
         var qs = require('qs');
         let datapost = qs.stringify(data)
-        editFileInfo(this.selectFileId, datapost).then((res) => {
+        editSubLibFileInfo(this.selectFileId, datapost).then((res) => {
           if(res.data.code === 0) {
             this.$notify({
               title: '成功',
@@ -994,47 +854,103 @@
           }
         })
       },
-
-      // 查询所有文件库
-      getLib() {
-        if(this.libOptions.length === 0) {
-          libraryList().then((res) => {
-            if(res.data.code === 0) {
-              let resData = res.data.data
-              this.libOptions = []
-              resData.forEach((item) => {
-                this.libOptions.push({
-                  label: item.type,
-                  value: item.id,
-                  children: []
-                })
-              })
-            }
-          })
-        }
+      onSubLibChange(val) {
+        this.fileUpInfo.subLibraryId = val[1]
       },
-
-      // 选择一级库
-      handleItemChange(val) {
-        let libId = val[0]
-        subLibraryList(libId).then((res) => {
-          for(let i = 0; i < this.libOptions.length; i++) {
-            if(libId === this.libOptions[i].value) {
-              if(this.libOptions[i].children.length == 0) {
-                res.data.data.forEach((item) => {
-                  this.libOptions[i].children.push({
-                    label: item.type,
-                    value: item.id
-                  })
-                })
-                break
-              }
-            }
+      handleSelectionChange(val) {
+        this.selectedFiles = val
+        console.log(this.selectedFiles)
+      },
+      handleVerifySelectionChange(val) {
+        this.verifyMembers = val
+      },
+      handleAuditSelectionChange(val) {
+        this.auditMembers = val
+      },
+      handleSignSelectionChange(val) {
+        this.signMembers = val
+      },
+      handleApproveSelectionChange(val) {
+        this.approveMembers = val
+      },
+      handleCommit() {
+        if(this.selectedFiles.length === 0) {
+          this.$message({
+            message: '清先选择文件！',
+            type: 'warning'
+          })
+          return
+        }
+        /*this.selectedFileIds = []
+        this.selectedFiles.forEach((item) => {
+          this.selectedFileIds.push(item.id)
+        })*/
+        this.commitDialog = true
+        this.signType = 1
+        this.getAbleUser()
+      },
+      commitToAuditor() {
+        let myCollatorIds = [] //核对
+        let myAuditIds = [] //审核
+        let myCountersignIds = [] //会签
+        let myApproveIds = [] //批准
+        let myFileIds = [] //批准
+        this.verifyMembers.forEach((item) => {
+          myCollatorIds.push(item.id)
+        })
+        this.auditMembers.forEach((item) => {
+          myAuditIds.push(item.id)
+        })
+        this.signMembers.forEach((item) => {
+          myCountersignIds.push(item.id)
+        })
+        this.approveMembers.forEach((item) => {
+          myApproveIds.push(item.id)
+        })
+        this.selectedFiles.forEach((item) => {
+          myFileIds.push(item.id)
+        })
+        let collatorIds = (myCollatorIds + '').replace(/\[|]/g, '')
+        let auditIds = (myAuditIds + '').replace(/\[|]/g, '')
+        let countersignIds = (myCountersignIds + '').replace(/\[|]/g, '')
+        let approveIds = (myApproveIds + '').replace(/\[|]/g, '')
+        let fileIds = (myFileIds + '').replace(/\[|]/g, '')
+        var qs = require('qs')
+        let data = {
+          'sublibraryFileId': fileIds,
+          'proofreadUserIds': collatorIds,
+          'auditUserIds': auditIds,
+          'countersignUserIds': this.signType === 1 ? '' : countersignIds, // 1:无会签 2:一人会签 3:多人会签
+          'approveUserIds': approveIds,
+          'auditMode': this.signType,
+          // 'userId': this.userId
+        }
+        let datapost = qs.stringify(data)
+        setLibFileAuditors(this.selectedId, datapost).then((res) => {
+          if(res.data.code === 0) {
+            this.$notify({
+              title: '成功',
+              message: '设置成功',
+              type: 'success',
+              duration: 2000
+            })
+            this.commitDialog = false
+          } else {
+            this.$notify({
+              title: '失败',
+              message: res.data.msg,
+              type: 'error',
+              duration: 2000
+            })
           }
         })
       },
-      onSubLibChange(val) {
-        this.fileUpInfo.subLibraryId = val[1]
+      fileAuditSelection(row) {
+        if (row.auditMode !== 0) {
+          return 0
+        } else {
+          return 1
+        }
       }
     },
     computed: {
@@ -1090,8 +1006,14 @@
       fileInfoListLength() {
         return this.fileInfoList.length
       },
-      folderFileLength() {
-        return this.folderFileInfo.length
+      computeList() {
+        let list = []
+        if(this.signType === 3) {
+          list = this.countersignList
+        } else {
+          list = this.userList
+        }
+        return list
       }
     },
     watch: {
@@ -1111,9 +1033,40 @@
       },
       fileInfoListLength(newValue, oldValue) {
         if(this.fileCompleteLength === this.fileInfoList.length && this.fileInfoList.length !== 0) {
+          let repeatFile = []
+          this.fileInfoList.forEach((item, index) => {
+
+          })
+          // for(let j = 0; j < this.fileInfoList.length; j++) {
+          for(let j = this.fileInfoList.length - 1; j >= 0; j--) {
+            for(let i = 0; i < this.list.length; i++) {
+              if(this.fileInfoList[j] !== undefined) {
+                if(this.fileInfoList[j].name === this.list[i].name + '.' + this.list[i].postfix) {
+                  this.fileInfoList.splice(j, 1);
+                  repeatFile.push(this.fileInfoList[j]);
+                  this.list[i].repeat === true
+                  continue;
+                }
+              }
+            }
+          }
+          if(repeatFile.length > 0) {
+            this.$message({
+              showClose: true,
+              message: '请注意，此次上传的文件中有' + repeatFile.length + '个文件在库中已存在！',
+              type: 'warning',
+              //duration: 0
+            });
+            /*this.$notify({
+              title: '提示',
+              message: '请主意，当前有' + repeatFile.length + '个文件库中已存在！',
+              type: 'success',
+              duration: '2000'
+            })*/
+          }
           let datapost = JSON.stringify(this.fileInfoList)
           this.statusText.success = '正在合并文件'
-          uploadFiles(this.componentId, this.projectId, datapost).then((res) => {
+          uploadSubLibFiles(this.componentId, this.userId, datapost).then((res) => {
             if(res.data.code === 0) {
               this.$notify({
                 title: '成功',
